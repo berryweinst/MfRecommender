@@ -28,6 +28,8 @@ def create_user_item_map(ratings_path, movies_path, percent=0.8, sort_ratings=Tr
                 ratings_data[users_map[user]] = []
             ratings_data[users_map[user]].append((items_map[item], rating, timestamp))
 
+    num_users = user_id
+    num_items = item_id
     X_train = dict()
     X_test = dict()
     training_items = set()
@@ -48,19 +50,19 @@ def create_user_item_map(ratings_path, movies_path, percent=0.8, sort_ratings=Tr
         X_test[user_id] = [rating for rating in user_rates if rating[0] in training_items]
     # print(user_id, item_id)
 
-    train_mat = np.zeros((user_id+1, item_id+1))
-    for user, item in X_train.items():
-        for movie, rate, _ in item:
-            train_mat[user][movie] = rate
-
-    test_mat = np.zeros((user_id+1, item_id+1))
-    for user, item in X_test.items():
-        for movie, rate, _ in item:
-            test_mat[user][movie] = rate
-
-
-    return train_mat, test_mat
+    # train_mat = np.zeros((user_id+1, item_id+1))
+    # for user, item in X_train.items():
+    #     for movie, rate, _ in item:
+    #         train_mat[user][movie] = rate
+    #
+    # test_mat = np.zeros((user_id+1, item_id+1))
+    # for user, item in X_test.items():
+    #     for movie, rate, _ in item:
+    #         test_mat[user][movie] = rate
 
 
-if __name__ == '__main__':
-    X_train, X_test = create_user_item_map('../ml-1m/ratings.dat', '', percent=0.8, sort_ratings=True)
+    return X_train, X_test, num_users, num_items
+
+
+# if __name__ == '__main__':
+#     X_train, X_test = create_user_item_map('../ml-1m/ratings.dat', '', percent=0.8, sort_ratings=True)
