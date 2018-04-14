@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.linalg import solve
 from data import *
 
 
@@ -7,7 +8,7 @@ from data import *
 
 class MFModel(object):
 
-    def __init__(self, rates_dict, num_users, num_items, hidden_dim, lr, gamma, epochs):
+    def __init__(self, rates_dict, ratings_test, num_users, num_items, hidden_dim, lr, gamma, epochs, optimizer, reg_u, reg_i):
         """ Params:
         1) ratings - rating matrix (as dict)
         2) hidden_dim  - number of latent dimensions (as integer)
@@ -17,10 +18,14 @@ class MFModel(object):
         """
 
         self.ratings_dict = rates_dict
+        self.ratings_test = ratings_test
         self.num_users = num_users
         self.num_items = num_items
         self.K = hidden_dim
         self.lr = lr
+        self.optimizer = optimizer
+        self.regulizer_items = reg_i
+        self.regulizer_users = reg_u
         self.gamma = gamma
         self.epochs = epochs
 
@@ -52,10 +57,15 @@ class MFModel(object):
 
         for epoch in range(self.epochs):
             reset(self.samples)
-            self.LearnModelFromDataUsingSGD()
-            rmse = self.RMSE()
+            if self.optimizer == 'sgd':
+                self.LearnModelFromDataUsingSGD()
+            elif self.optimizer == 'als':
+                self.LearnModelFromDataUsingALS()
+            train_rmse = self.RMSE()
+            print("[Epoch %d] : train RMSE = %.4f" % (epoch, train_rmse))
             if epoch % 5 == 0:
-                print("[Epoch %d] : RMSE = %.4f" % (epoch, rmse))
+                eval_rmse = self.RMSE(self.ratings_test)
+                print("[Epoch %d] : evaluation RMSE = %.4f" % (epoch, eval_rmse))
 
 
     def LearnModelFromDataUsingSGD (self):
@@ -73,11 +83,40 @@ class MFModel(object):
 
 
 
-    def RMSE(self):
+    def LearnModelFromDataUsingALS(self):
+        """
+        Performs one iteration on one of the User/Items matrices
+        """
+        # Users update
+        VtV = self.V.T.dot(self.V)
+        lambda_i = np.eye(self.K) * self.regulizer_users
+
+        for u_idx in range(self.U.shape[0]):
+            user_items = np.zeros([self.num_items])
+            for i, r, _ in self.ratings_dict[u_idx]:
+                user_items[i] = r
+            self.U[u_idx,:] = solve((VtV + lambda_i), user_items.dot(self.V))
+
+        # Items update
+        UtU = self.U.T.dot(self.U)
+        lambda_i = np.eye(self.K) * self.regulizer_items
+
+        for i_idx in range(self.V.shape[0]):
+            item_users = np.zeros([self.num_users])
+            for u_idx, items in self.ratings_dict.items():
+                rate = [t[1] for t in items if i_idx == t[0]] or None
+                if rate:
+                    item_users[u_idx] = rate[0]
+            self.V[i_idx,:] = solve((UtU + lambda_i), item_users.dot(self.U))
+
+
+
+    def RMSE(self, rating_dict=None):
+        rating_dict = rating_dict if rating_dict != None else self.ratings_dict
         mod_pred = self.bu[:,np.newaxis] + self.bv[np.newaxis:,] + self.U.dot(self.V.T)
         total_err = 0
         r_cnt = 0
-        for u, items in self.ratings_dict.items():
+        for u, items in rating_dict.items():
             for i, r, _ in items:
                 total_err += pow(r - mod_pred[u, i], 2)
                 r_cnt += 1
@@ -106,10 +145,10 @@ class MFModel(object):
 
 if __name__ == '__main__':
     X_train, X_test, users, items = create_user_item_map('../ml-1m/ratings.dat', '', percent=0.8, sort_ratings=True)
-    model = MFModel(X_train, users, items, hidden_dim=5, lr=0.005, gamma=0.001, epochs=100)
+    model = MFModel(X_train, X_test, users, items, hidden_dim=5, lr=0.005, gamma=0.001, epochs=100, reg_u=0.01,
+                    reg_i=0.01, optimizer='als')
     print("Starting training ...")
     model.train_model()
     # predict
-    model.ratings_dict = X_test
-    test_rmse = model.RMSE()
+    test_rmse = model.RMSE(X_test)
     print("Test RMSE: %.4f" % (test_rmse))
