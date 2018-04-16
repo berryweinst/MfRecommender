@@ -1,14 +1,15 @@
+import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
-from numpy.linalg import solve
+from scipy.sparse.linalg import spsolve
+from scipy import sparse
 from data import *
-
-
-
 
 
 class MFModel(object):
 
-    def __init__(self, rates_dict, ratings_test, num_users, num_items, hidden_dim, lr, gamma, epochs, optimizer, reg_u, reg_i):
+    def __init__(self, rates_dict, test_rates_dict, num_users, num_items, hidden_dim, lr, gamma, epochs, optimizer,
+                 reg_u, reg_i, confidence=1):
         """ Params:
         1) ratings - rating matrix (as dict)
         2) hidden_dim  - number of latent dimensions (as integer)
@@ -18,23 +19,33 @@ class MFModel(object):
         """
 
         self.ratings_dict = rates_dict
-        self.ratings_test = ratings_test
+        self.test_ratings_dict = test_rates_dict
         self.num_users = num_users
         self.num_items = num_items
         self.K = hidden_dim
-        self.lr = lr
         self.optimizer = optimizer
+        self.lr = lr
+        self.gamma = gamma
         self.regulizer_items = reg_i
         self.regulizer_users = reg_u
-        self.gamma = gamma
+        self.confidence = confidence
         self.epochs = epochs
+        self.scbd = []
+
+    def print_hyper_params(self):
+        print("latent dimention %d" % (self.K))
+        print("learning rate %r" % (self.lr))
+        print("lambda SGD %r" % (self.gamma))
+        print("lambda ALS users %r" % (self.regulizer_users))
+        print("lambda ALS items %r" % (self.regulizer_items))
+        print("Confidence ALS %d" % (self.confidence))
+        print("Epochs %d" % (self.epochs))
 
     def init(self, isize, ik, kind='normal'):
         if kind == 'normal':
-            return np.random.normal(scale=1.0/ik, size=(isize, ik))
+            return np.random.normal(scale=1.0 / ik, size=(isize, ik))
         elif kind == 'uniform':
-            return np.random.uniform(-1.0/ik, 1.0/ik)
-
+            return np.random.uniform(-1.0 / ik, 1.0 / ik)
 
     def train_model(self):
 
@@ -50,10 +61,13 @@ class MFModel(object):
         self.U = self.init(self.num_users, self.K, kind='normal')
         self.V = self.init(self.num_items, self.K, kind='normal')
 
+        #sparse intermidiate representation
+        self.Us = sparse.csr_matrix(self.U)
+        self.Vs = sparse.csr_matrix(self.V)
+
         # Initialize the biases
         self.bu = np.zeros(self.num_users)
         self.bv = np.zeros(self.num_items)
-
 
         for epoch in range(self.epochs):
             reset(self.samples)
@@ -61,14 +75,17 @@ class MFModel(object):
                 self.LearnModelFromDataUsingSGD()
             elif self.optimizer == 'als':
                 self.LearnModelFromDataUsingALS()
-            train_rmse = self.RMSE()
+            train_rmse = self.RMSE(is_train=True)
+            val_rmse = self.RMSE()
             print("[Epoch %d] : train RMSE = %.4f" % (epoch, train_rmse))
             if epoch % 5 == 0:
-                eval_rmse = self.RMSE(self.ratings_test)
-                print("[Epoch %d] : evaluation RMSE = %.4f" % (epoch, eval_rmse))
+                print("[Epoch %d] : validation RMSE = %.4f" % (epoch, val_rmse))
+            self.scbd.append((epoch, train_rmse, val_rmse))
 
-
-    def LearnModelFromDataUsingSGD (self):
+    def LearnModelFromDataUsingSGD(self):
+        """
+        Performs one iteration on one of the User/Items matrices
+        """
         for u, v, rate in self.samples:
             prediction = self.bu[u] + self.bv[v] + self.U[u, :].dot(self.V[v, :].T)
             err = (rate - prediction)
@@ -87,68 +104,54 @@ class MFModel(object):
         """
         Performs one iteration on one of the User/Items matrices
         """
-        # Users update
-        VtV = self.V.T.dot(self.V)
-        lambda_i = np.eye(self.K) * self.regulizer_users
+        rate_mat = np.zeros((self.num_users, self.num_items))
+        for user, item in self.ratings_dict.items():
+            for movie, rate, _ in item:
+                rate_mat[user][movie] = rate
+        rate_mat = sparse.csr_matrix(rate_mat) * self.confidence
 
-        for u_idx in range(self.U.shape[0]):
-            user_items = np.zeros([self.num_items])
-            for i, r, _ in self.ratings_dict[u_idx]:
-                user_items[i] = r
-            self.U[u_idx,:] = solve((VtV + lambda_i), user_items.dot(self.V))
+        U_i = sparse.eye(self.num_users)
+        V_i = sparse.eye(self.num_items)
+
+        # UtU = self.Us.T.dot(self.Us)
+        # VtV = self.Vs.T.dot(self.Vs)
+
+        # Users update
+        lambda_u = sparse.eye(self.K) * self.regulizer_users
+        for u_idx, u_rate in enumerate(rate_mat):
+            u_dense = u_rate.toarray()
+            u_bin = u_dense.copy()
+            u_bin[u_bin != 0] = 1.0
+            u_diag = sparse.diags(u_dense, [0])
+            VtV = self.Vs.T.dot(u_diag).dot(self.Vs)
+            VtV_u = self.Vs.T.dot(u_diag).dot(u_dense.T)
+            self.Us[u_idx, :] = spsolve(VtV + lambda_u, VtV_u)
+
+
 
         # Items update
-        UtU = self.U.T.dot(self.U)
-        lambda_i = np.eye(self.K) * self.regulizer_items
+        lambda_i = sparse.eye(self.K) * self.regulizer_items
+        for i_idx, i_rate in enumerate(rate_mat.T):
+            i_dense = i_rate.toarray()
+            i_bin = i_dense.copy()
+            i_bin[i_bin != 0] = 1.0
+            i_diag = sparse.diags(i_dense, [0])
+            UtU = self.Us.T.dot(i_diag).dot(self.Us)
+            UtU_i = self.Us.T.dot(i_diag).dot(i_dense.T)
+            self.Vs[i_idx, :] = spsolve(UtU + lambda_i, UtU_i)
 
-        for i_idx in range(self.V.shape[0]):
-            item_users = np.zeros([self.num_users])
-            for u_idx, items in self.ratings_dict.items():
-                rate = [t[1] for t in items if t[0] == i_idx] or None
-                if rate:
-                    item_users[u_idx] = rate[0]
-            self.V[i_idx,:] = solve((UtU + lambda_i), item_users.dot(self.U))
+        self.U = self.Us.toarray()
+        self.V = self.Vs.toarray()
 
 
 
-    def RMSE(self, rating_dict=None):
-        rating_dict = rating_dict if rating_dict != None else self.ratings_dict
-        mod_pred = self.bu[:,np.newaxis] + self.bv[np.newaxis:,] + self.U.dot(self.V.T)
+    def RMSE(self, is_train=False):
+        mod_pred = self.bu[:, np.newaxis] + self.bv[np.newaxis:, ] + self.U.dot(self.V.T)
         total_err = 0
         r_cnt = 0
-        for u, items in rating_dict.items():
+        ratings_dict = self.ratings_dict if is_train else self.test_ratings_dict
+        for u, items in ratings_dict.items():
             for i, r, _ in items:
                 total_err += pow(r - mod_pred[u, i], 2)
                 r_cnt += 1
         return np.sqrt(total_err / r_cnt)
-
-
-
-# TODO: Igal to implement evaluation class (take RMSE from above)
-# class EvalModel(MFModel):
-#     def __init__(self, ratings_dict, model):
-#         """ Params:
-#        ratings_dict - rating matrix (as dict)
-#        """
-#
-#     def EvalModel(self, input, kind='rmse'):
-#         if kind == 'rmse':
-#             return self.RMSE(input)
-
-
-
-
-
-
-
-
-
-if __name__ == '__main__':
-    X_train, X_test, users, items = create_user_item_map('../ml-1m/ratings.dat', '', percent=0.8, sort_ratings=True)
-    model = MFModel(X_train, X_test, users, items, hidden_dim=5, lr=0.005, gamma=0.001, epochs=100, reg_u=0.01,
-                    reg_i=0.01, optimizer='als')
-    print("Starting training ...")
-    model.train_model()
-    # predict
-    test_rmse = model.RMSE(X_test)
-    print("Test RMSE: %.4f" % (test_rmse))

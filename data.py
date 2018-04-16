@@ -2,6 +2,8 @@ import random
 import math
 import numpy as np
 
+
+
 def create_user_item_map(ratings_path, movies_path, percent=0.8, sort_ratings=True):
     users_map = dict()
     items_map = dict()
@@ -39,7 +41,8 @@ def create_user_item_map(ratings_path, movies_path, percent=0.8, sort_ratings=Tr
         if sort_ratings: # sort ratings by their timestamp
             ratings = sorted(ratings_data[user_id], key=lambda x: x[2])
         else:
-            ratings = random.shuffle([rate for rate in ratings_data[user_id]])
+            ratings = [rate for rate in ratings_data[user_id]]
+            ratings = random.sample(ratings, len(ratings))
         t_idx = math.floor(percent * len(ratings))
         X_train[user_id] = ratings[:t_idx]
         for rating_item in ratings[:t_idx]:
