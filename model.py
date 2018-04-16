@@ -104,7 +104,7 @@ class MFModel(object):
         for i_idx in range(self.V.shape[0]):
             item_users = np.zeros([self.num_users])
             for u_idx, items in self.ratings_dict.items():
-                rate = [t[1] for t in items if i_idx == t[0]] or None
+                rate = [t[1] for t in items if t[0] == i_idx] or None
                 if rate:
                     item_users[u_idx] = rate[0]
             self.V[i_idx,:] = solve((UtU + lambda_i), item_users.dot(self.U))
